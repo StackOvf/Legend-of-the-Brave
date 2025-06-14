@@ -6,6 +6,9 @@ var current_state: int = -1:
 		# owner表示父节点，这里是player
 		owner.transition_state(current_state, v)
 		current_state = v
+		state_time = 0
+# 记录玩家在当前状态下经过了多少时间
+var state_time : float
 
 func _ready() -> void:
 	# 等待父节点ready信号(从下往上执行ready函数)
@@ -23,3 +26,5 @@ func _physics_process(delta: float) -> void:
 		current_state = next
 	
 	owner.tick_physics(current_state, delta)
+	# 记录每个状态的时间
+	state_time += delta

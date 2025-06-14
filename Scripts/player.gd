@@ -7,13 +7,15 @@ enum State{
 	FALL,
 	LANDING,
 	WALL_SLIDING,
+	WALL_JUMP,
 }
 
 @export var RUN_SPEED := 160.0
 @export var JUMP_VELOCITY := -300.0
-var FLOOR_ACCELERATION := RUN_SPEED / 0.1
-var AIR_ACCELERATION := RUN_SPEED / 0.02
+var FLOOR_ACCELERATION := RUN_SPEED / 0.2
+var AIR_ACCELERATION := RUN_SPEED / 0.1
 const GROUND_STATES :=[State.IDLE, State.RUNNING, State.LANDING]
+const WALL_JUMP_VELOCITY := Vector2(380, -280) 
 var is_first_tick := false	# 使第一帧跳跃速度不受重力影响
 
 @onready var graphics: Node2D = $Graphics
@@ -22,6 +24,7 @@ var is_first_tick := false	# 使第一帧跳跃速度不受重力影响
 @onready var jump_request_timer: Timer = $JumpRequestTimer
 @onready var foot_checker: RayCast2D = $Graphics/FootChecker
 @onready var hand_checker: RayCast2D = $Graphics/HandChecker
+@onready var state_machine: StateMachine = $StateMachine
 
 # 获取重力加速度
 var default_gravity := ProjectSettings.get("physics/2d/default_gravity") as float
@@ -45,17 +48,29 @@ func tick_physics(state: State, delta: float) -> void:
 			move(default_gravity, delta)
 				
 		State.JUMP:
+			# 重力不影响第一帧跳跃速度
 			move(0.0 if is_first_tick else default_gravity, delta)
 				
 		State.FALL:
 			move(default_gravity, delta)
 		
 		State.LANDING:
-			stand(delta)
+			stand(default_gravity, delta)
 		
 		State.WALL_SLIDING:
+			# 滑墙速度变慢
 			move(default_gravity / 3, delta)
+			# 滑墙动画朝向设定
 			graphics.scale.x = get_wall_normal().x
+			
+		State.WALL_JUMP:
+			if state_machine.state_time < 0.1:
+				# 确保忽略玩家输入
+				stand(0.0 if is_first_tick else default_gravity, delta)
+				# 确保跳出去的0.1s内玩家背对墙壁
+				graphics.scale.x = get_wall_normal().x
+			else:
+				move(default_gravity, delta)
 			
 	is_first_tick = false	
 
@@ -110,13 +125,17 @@ func move(gravity: float, delta: float) -> void:
 			#coyote_timer.stop()
 
 # 专用于landing的tick_physics
-func stand(delta: float) -> void:
+func stand(gravity: float, delta: float) -> void:
 	var acceleration := FLOOR_ACCELERATION if is_on_floor() else AIR_ACCELERATION
+	# 平滑的将x轴速度变为0
 	velocity.x = move_toward(velocity.x, 0.0, acceleration * delta)
 	# 设置y轴重力影响的速度
-	velocity.y += default_gravity * delta
+	velocity.y += gravity * delta
 	
 	move_and_slide()
+# 判断能否进入wall_slide状态
+func can_wall_slide() -> bool:
+	return is_on_wall_only() and hand_checker.is_colliding() and foot_checker.is_colliding()
 
 
 # 状态转换函数
@@ -154,7 +173,7 @@ func get_next_state(state: State) -> State:
 		State.FALL:
 			if is_on_floor():
 				return State.LANDING if is_still else State.RUNNING
-			if is_on_wall_only() and hand_checker.is_colliding() and foot_checker.is_colliding():
+			if can_wall_slide():
 				return State.WALL_SLIDING
 				
 		State.LANDING:
@@ -164,15 +183,30 @@ func get_next_state(state: State) -> State:
 				return State.IDLE
 		
 		State.WALL_SLIDING:
+			if jump_request_timer.time_left > 0 and not is_first_tick: 
+				return State.WALL_JUMP
 			if is_on_floor():
 				return State.IDLE
 			if not is_on_wall():
 				return State.FALL
-				
+		
+		State.WALL_JUMP:
+			# 确保蹬墙跳可以连续
+			# 必须在wall_jump状态下过了1帧，不然会在同一帧进行
+			if can_wall_slide() and not is_first_tick:
+				return State.WALL_SLIDING
+			if velocity.y >= 0:
+				return State.FALL
+		
 	return state
 
 # 在退出或进入某个状态时，执行的函数 
 func transition_state(from: State, to: State) -> void:
+	print("[%s] %s => %s" %[
+		Engine.get_physics_frames(),
+		State.keys()[from] if from != -1 else "<START>",
+		State.keys()[to]
+	])
 	# 任何时候只要着陆，就关闭coyotetime
 	if from not in GROUND_STATES and to in GROUND_STATES:
 		coyote_timer.stop()
@@ -199,5 +233,11 @@ func transition_state(from: State, to: State) -> void:
 			
 		State.WALL_SLIDING:
 			animation_player.play("wall_sliding")
-			
+		
+		State.WALL_JUMP:
+			animation_player.play("jump")
+			velocity = WALL_JUMP_VELOCITY
+			velocity.x *= get_wall_normal().x
+			jump_request_timer.stop()
+	
 	is_first_tick = true
