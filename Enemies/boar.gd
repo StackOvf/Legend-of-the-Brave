@@ -11,6 +11,10 @@ enum State{
 @onready var player_checker: RayCast2D = $Graphics/PlayerChecker
 @onready var calm_down_timer: Timer = $CalmDownTimer
 
+func can_see_player() -> bool:
+	if not player_checker.is_colliding():
+		return false
+	return player_checker.get_collider() is Player
 
 func tick_physics(state: State, delta: float) -> void:
 	match state:
@@ -27,13 +31,13 @@ func tick_physics(state: State, delta: float) -> void:
 			move(max_speed, delta)
 			# 玩家在checker之内，剩余时间不变
 			# 保证野猪一直追
-			if player_checker.is_colliding():
+			if can_see_player():
 				calm_down_timer.start()
 
 
 func get_next_state(state: State) -> State:
 	# 不管现在是什么状态，遇到玩家就会进入RUN状态
-	if player_checker.is_colliding():
+	if can_see_player():
 		return State.RUN
 	
 	match state:
@@ -84,3 +88,7 @@ func transition_state(from: State, to: State) -> void:
 				floor_checker.force_raycast_update()
 				
 		
+
+
+func _on_hurtbox_hurt(hitbox: Hitbox) -> void:
+	print("Ouch!")
