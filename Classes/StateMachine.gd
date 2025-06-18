@@ -1,6 +1,9 @@
 class_name StateMachine
 extends Node
 
+# 特殊值，确保保持状态不变时，都重新进入一次该状态
+const KEEP_CURRENT := -1
+
 var current_state: int = -1:
 	set(v):
 		# owner表示父节点，这里是player
@@ -21,7 +24,8 @@ func _physics_process(delta: float) -> void:
 	# 状态推进循环
 	while true:
 		var next := owner.get_next_state(current_state) as int
-		if current_state == next:
+		# 无论是否转变状态，都会调用transition_state函数来重新进入状态
+		if next == KEEP_CURRENT:
 			break
 		current_state = next
 	

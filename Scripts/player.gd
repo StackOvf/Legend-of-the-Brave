@@ -12,6 +12,8 @@ enum State{
 	ATTACK_1,
 	ATTACK_2,
 	ATTACK_3,
+	HURT,
+	DYING,
 }
 
 @export var RUN_SPEED := 160.0
@@ -24,8 +26,11 @@ const GROUND_STATES :=[
 	State.IDLE, State.RUNNING,State.LANDING,
 	State.ATTACK_1, State.ATTACK_2, State.ATTACK_3]
 const WALL_JUMP_VELOCITY := Vector2(380, -280) 
+const KNOCKBACK_AMOUNT := 450.0
+
 var is_first_tick := false	# 使第一帧跳跃速度不受重力影响
 var is_combo_requested := false # combo是否被请求
+var pending_damage: Damage # 声明待处理伤害
 
 @onready var graphics: Node2D = $Graphics
 @onready var animation_player: AnimationPlayer = $AnimationPlayer
@@ -34,6 +39,10 @@ var is_combo_requested := false # combo是否被请求
 @onready var foot_checker: RayCast2D = $Graphics/FootChecker
 @onready var hand_checker: RayCast2D = $Graphics/HandChecker
 @onready var state_machine: StateMachine = $StateMachine
+@onready var stats: Stats = $Stats
+@onready var invincible_timer: Timer = $InvincibleTimer
+
+
 
 # 获取重力加速度
 var default_gravity := ProjectSettings.get("physics/2d/default_gravity") as float
@@ -51,6 +60,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func tick_physics(state: State, delta: float) -> void:
+	if invincible_timer.time_left > 0:
+		graphics.modulate.a = sin(Time.get_ticks_msec() / 20) * 0.5 + 0.5
+	else:
+		graphics.modulate.a = 1
+	
 	
 	match state:
 		State.IDLE:
@@ -85,6 +99,9 @@ func tick_physics(state: State, delta: float) -> void:
 				move(default_gravity, delta)
 				
 		State.ATTACK_1, State.ATTACK_2, State.ATTACK_3:
+			stand(default_gravity, delta)
+		
+		State.HURT, State.DYING:
 			stand(default_gravity, delta)
 			
 	is_first_tick = false	
@@ -148,6 +165,11 @@ func stand(gravity: float, delta: float) -> void:
 	velocity.y += gravity * delta
 	
 	move_and_slide()
+
+# 人物死亡
+func die() -> void:
+	get_tree().reload_current_scene()	
+	
 	
 # 判断能否进入wall_slide状态
 func can_wall_slide() -> bool:
@@ -155,7 +177,17 @@ func can_wall_slide() -> bool:
 
 
 # 状态转换函数
-func get_next_state(state: State) -> State:
+func get_next_state(state: State) -> int:
+	# 当前生命值为0，进入死亡状态
+	# 在死亡状态下，不会重新进入死亡状态
+	if stats.health == 0:
+		return state_machine.KEEP_CURRENT if state == State.DYING else State.DYING
+		
+	# 有待处理的伤害，进入受伤状态
+	# 重复受伤，也会重新进入受伤状态
+	if pending_damage:
+		return State.HURT
+	
 	# 跳跃判断
 	# 在地板上或者coyotetime时
 	var can_jump := is_on_floor() or coyote_timer.time_left >0
@@ -232,7 +264,13 @@ func get_next_state(state: State) -> State:
 			if not animation_player.is_playing():
 				return State.IDLE
 				
-	return state
+		State.HURT:
+			# HURT的动画播放完，直接IDLE
+			if not animation_player.is_playing():
+				return State.IDLE
+				
+	# 保持原来状态不变，但重新进入该状态
+	return state_machine.KEEP_CURRENT
 
 # 在退出或进入某个状态时，执行的函数 
 func transition_state(from: State, to: State) -> void:
@@ -286,5 +324,37 @@ func transition_state(from: State, to: State) -> void:
 		State.ATTACK_3:
 			animation_player.play("attack_3")
 			is_combo_requested = false
+		
+		State.HURT:
+			animation_player.play("hurt")
+			# 扣除血量
+			stats.health -= pending_damage.amount
 			
+			# 击退
+			# 击退方向：从伤害来源的位置指向自己的位置
+			var dir := pending_damage.source.global_position.direction_to(global_position)
+			# 击退速度
+			velocity.x =  sign(dir.x)* KNOCKBACK_AMOUNT
+				
+			# 防止get_next_state再进入受伤状态 
+			pending_damage = null
+			
+			# 进入无敌时间
+			invincible_timer.start()
+		
+		State.DYING:
+			animation_player.play("die")
+			# 停止无敌时间
+			invincible_timer.stop()
+		
 	is_first_tick = true
+
+
+func _on_hurtbox_hurt(hitbox: Hitbox) -> void:
+	# 在无敌时间内不会受到伤害
+	if invincible_timer.time_left > 0:
+		return
+	# 实例化pending_damage
+	pending_damage = Damage.new()
+	pending_damage.amount = 1
+	pending_damage.source = hitbox.owner
